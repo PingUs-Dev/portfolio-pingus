@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import together
 import logging
 import re
+from huggingface_hub import InferenceClient
 
 # Load environment variables
 load_dotenv()
@@ -18,17 +19,58 @@ if not hasattr(np, 'int'):
 if not hasattr(np, 'float_'):
     np.float_ = np.float64
 
-# Get API key
+# Get API keys
 TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 # Document processing imports
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import Docx2txtLoader, UnstructuredWordDocumentLoader, TextLoader, PyPDFLoader
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain.schema import Document
 
 logger = logging.getLogger(__name__)
+
+class HFInferenceEmbeddings:
+    """Custom embedding class using HuggingFace Inference API"""
+    def __init__(self, client, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+        self.client = client
+        self.model_name = model_name
+    
+    def embed_documents(self, texts):
+        """Embed a list of documents"""
+        embeddings = []
+        for text in texts:
+            try:
+                result = self.client.feature_extraction(
+                    text,
+                    model=self.model_name
+                )
+                # Ensure result is a list/array
+                if isinstance(result, list):
+                    embeddings.append(result)
+                else:
+                    embeddings.append(result.tolist())
+            except Exception as e:
+                logger.warning(f"Failed to embed text: {str(e)[:100]}...")
+                # Use zero vector as fallback (384 dimensions for MiniLM)
+                embeddings.append([0.0] * 384)
+        return embeddings
+    
+    def embed_query(self, text):
+        """Embed a single query"""
+        try:
+            result = self.client.feature_extraction(
+                text,
+                model=self.model_name
+            )
+            if isinstance(result, list):
+                return result
+            else:
+                return result.tolist()
+        except Exception as e:
+            logger.warning(f"Failed to embed query: {e}")
+            return [0.0] * 384
 
 class RagEngine:
     def __init__(self, doc_folder: str = None, persist_directory: str = "./chroma_langchain_db"):
@@ -79,26 +121,36 @@ class RagEngine:
             # Try different embedding approaches
             embedding = None
             
-            # First try: HuggingFaceEmbeddings with sentence-transformers
+            # First try: HuggingFace Inference API (memory-efficient)
             try:
-                # Try to install sentence-transformers if not available
+                # Initialize HF Inference client
+                if HF_TOKEN:
+                    hf_client = InferenceClient(api_key=HF_TOKEN)
+                    logger.info("Using authenticated HuggingFace client")
+                else:
+                    logger.warning("HF_TOKEN not found, trying without authentication")
+                    hf_client = InferenceClient()
+                
+                # Test the API with a simple call
                 try:
-                    import sentence_transformers
-                except ImportError:
-                    logger.warning("sentence-transformers not installed, using fallback")
-                    raise ImportError("sentence-transformers not available")
+                    test_result = hf_client.feature_extraction(
+                        "test sentence",
+                        model="sentence-transformers/all-MiniLM-L6-v2"
+                    )
+                    logger.info("HuggingFace API test successful")
+                except Exception as test_e:
+                    logger.warning(f"HF API test failed: {test_e}")
+                    raise Exception(f"HF API test failed: {test_e}")
                 
-                embedding = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2",
-                    model_kwargs={'device': 'cpu'},
-                    encode_kwargs={'normalize_embeddings': True}
-                )
+                # Use the HF API embedding
+                embedding = HFInferenceEmbeddings(hf_client)
                 self.embedding_model = embedding
-                logger.info("Using HuggingFaceEmbeddings with sentence-transformers")
-            except Exception as e:
-                logger.warning(f"HuggingFaceEmbeddings failed: {e}")
+                logger.info("Using HuggingFace Inference API for embeddings (memory-efficient)")
                 
-            # Second try: Use TF-IDF or other simple approach
+            except Exception as e:
+                logger.warning(f"HuggingFace Inference API failed: {e}")
+                
+            # Second try: Use simple keyword matching as fallback
             if embedding is None:
                 logger.warning("Using simple keyword matching (no embeddings)")
                 # Store documents for keyword-based search
@@ -106,27 +158,38 @@ class RagEngine:
                 return
             
             # Create/Load Chroma VectorDB
-            self.vectordb = Chroma.from_documents(
-                documents=split_docs,
-                embedding=embedding,
-                persist_directory=self.persist_directory
-            )
-            self.vectordb.persist()
-            logger.info(f"VectorDB ready with {len(split_docs)} chunks")
+            try:
+                self.vectordb = Chroma.from_documents(
+                    documents=split_docs,
+                    embedding=embedding,
+                    persist_directory=self.persist_directory
+                )
+                self.vectordb.persist()
+                logger.info(f"VectorDB ready with {len(split_docs)} chunks")
+            except Exception as chroma_e:
+                logger.error(f"Chroma VectorDB creation failed: {chroma_e}")
+                # Fallback to keyword search
+                self.documents_cache = split_docs
+                logger.info(f"Using fallback keyword search with {len(split_docs)} chunks")
             
         except Exception as e:
             logger.error(f"Error initializing vector store: {e}")
             # Store documents for fallback keyword search
-            docs = self.load_documents()
-            if not docs:
-                docs = self.create_minimal_knowledge_base()
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
-                separators=["\n\n", "\n", ". ", " ", ""]
-            )
-            self.documents_cache = text_splitter.split_documents(docs)
-            logger.info(f"Using fallback keyword search with {len(self.documents_cache)} chunks")
+            try:
+                docs = self.load_documents()
+                if not docs:
+                    docs = self.create_minimal_knowledge_base()
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000,
+                    chunk_overlap=200,
+                    separators=["\n\n", "\n", ". ", " ", ""]
+                )
+                self.documents_cache = text_splitter.split_documents(docs)
+                logger.info(f"Using fallback keyword search with {len(self.documents_cache)} chunks")
+            except Exception as fallback_e:
+                logger.error(f"Even fallback initialization failed: {fallback_e}")
+                # Create minimal cache
+                self.documents_cache = self.create_minimal_knowledge_base()
     
     def load_documents(self):
         """Load documents from the specified folder"""
@@ -175,27 +238,27 @@ class RagEngine:
         """Create a minimal knowledge base for fallback"""
         minimal_knowledge = [
             Document(
-                page_content="TechCraft Solutions offers AI Integration services including custom chatbots and LLM solutions.",
+                page_content="PingUs is a freelancing team of five developers from India specializing in AI solutions and web applications.",
                 metadata={"source_file": "default_knowledge.docx"}
             ),
             Document(
-                page_content="Our web development services include creating responsive websites and applications with modern technologies.",
+                page_content="Our AI Integration services include custom chatbots, RAG systems, and LLM solutions for businesses.",
                 metadata={"source_file": "default_knowledge.docx"}
             ),
             Document(
-                page_content="We provide mobile app development for both iOS and Android platforms.",
+                page_content="We provide web development services including responsive websites and scalable web applications with modern technologies.",
                 metadata={"source_file": "default_knowledge.docx"}
             ),
             Document(
-                page_content="API development and integration services help connect your business systems.",
+                page_content="API development and integration services help connect your business systems and automate workflows.",
                 metadata={"source_file": "default_knowledge.docx"}
             ),
             Document(
-                page_content="Contact us at contact@techcraft.com or through our website form.",
+                page_content="Contact PingUs through email, LinkedIn, or our website contact form. We respond quickly and work in IST timezone.",
                 metadata={"source_file": "default_knowledge.docx"}
             ),
             Document(
-                page_content="Pricing is customized based on project scope and requirements.",
+                page_content="Pricing for our services is customized based on project scope, complexity, and specific requirements.",
                 metadata={"source_file": "default_knowledge.docx"}
             )
         ]
@@ -290,7 +353,6 @@ class RagEngine:
             return {
                 "response": "Authentication error. Please check your API configuration.",
                 "sources": [],
-                "sources": [],
                 "success": False
             }
         except together.error.RateLimitError:
@@ -327,7 +389,7 @@ class RagEngine:
         
         # System message with instructions
         system_message = """You are an AI-powered assistant representing PingUs ✨ – a freelancing team of five developers from India 🇮🇳.
-You provide answers strictly based on PingUs’ portfolio documents 📂.
+You provide answers strictly based on PingUs' portfolio documents 📂.
 
 🎯 Goals:
 
@@ -337,7 +399,7 @@ Highlight key points with bold text ✨
 
 Use structured lists 📌 for readability
 
-Never say “I don’t know” 🙅 — instead, guide users toward services, expertise, or contact options
+Never say "I don't know" 🙅 — instead, guide users toward services, expertise, or contact options
 
 Maintain a friendly + professional tone 🤝
 
@@ -346,20 +408,20 @@ End with a call to action 📞 when suitable
 💡 Example Styles:
 
 Q: Who are you?
-👉 “We are PingUs – a team of five freelance developers 👨‍💻👩‍💻 from India.
+👉 "We are PingUs – a team of five freelance developers 👨‍💻👩‍💻 from India.
 Our expertise lies in:
 
 🤖 AI Solutions (Chatbots, RAG systems, AI Agents)
 
 🌐 Web Applications (Scalable, real-time, secure)
-Together, we help businesses automate workflows, boost engagement, and scale online 🚀.”
+Together, we help businesses automate workflows, boost engagement, and scale online 🚀."
 
 Q: Do you build mobile apps?
-👉 “At PingUs, we specialize in Web Applications 🌐 and AI Chatbots 🤖.
-Mobile app development 📱 is not part of our services at this time.”
+👉 "At PingUs, we specialize in Web Applications 🌐 and AI Chatbots 🤖.
+Mobile app development 📱 is not part of our services at this time."
 
 Q: How can I contact you?
-👉 “You can reach PingUs through:
+👉 "You can reach PingUs through:
 
 📧 Email
 
@@ -443,9 +505,6 @@ Answer:"""
 # Test function
 def test_together_api():
     """Test the Together API connection"""
-    from dotenv import load_dotenv
-    load_dotenv()
-    
     api_key = os.getenv("TOGETHER_API_KEY")
     if not api_key:
         print("ERROR: TOGETHER_API_KEY not found in environment variables")
@@ -465,14 +524,39 @@ def test_together_api():
         print(f"ERROR: Together API test failed: {e}")
         return False
 
+def test_hf_api():
+    """Test the HuggingFace API connection"""
+    hf_token = os.getenv("HF_TOKEN")
+    try:
+        if hf_token:
+            client = InferenceClient(api_key=hf_token)
+        else:
+            client = InferenceClient()
+            
+        result = client.feature_extraction(
+            "test sentence",
+            model="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        print("SUCCESS: HuggingFace API is working!")
+        print(f"Embedding dimension: {len(result)}")
+        return True
+    except Exception as e:
+        print(f"ERROR: HuggingFace API test failed: {e}")
+        return False
+
 if __name__ == "__main__":
-    # Test the API connection
+    # Test the APIs
+    print("Testing Together API...")
     test_together_api()
     
+    print("\nTesting HuggingFace API...")
+    test_hf_api()
+    
     # Test the RAG engine
+    print("\nTesting RAG Engine...")
     engine = RagEngine()
-    result = engine.query("What services does TechCraft offer?")
-    print("\nRAG Test Result:")
+    result = engine.query("What services does PingUs offer?")
+    print("RAG Test Result:")
     print(f"Response: {result['response']}")
     print(f"Success: {result['success']}")
     if result['sources']:
