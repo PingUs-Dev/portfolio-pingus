@@ -1,5 +1,5 @@
 // Configuration - Updated for proper backend connection
-const API_URL = "https://your-backend.onrender.com";
+const API_URL = "https://pingus-backend.onrender.com";
 let currentSessionId = null;
 let conversationHistory = [];
 
