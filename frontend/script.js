@@ -1,6 +1,6 @@
 // Configuration - Fixed for proper backend connection
 const API_URL = "https://pingus-backend.onrender.com";
-const API_BASE_URL = `${API_URL}/api`; // This was missing but used throughout the code
+const API_BASE_URL = API_URL; // This was missing but used throughout the code
 let currentSessionId = null;
 let conversationHistory = [];
 
