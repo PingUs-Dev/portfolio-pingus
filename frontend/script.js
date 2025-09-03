@@ -430,7 +430,7 @@ async function loadDocumentList() {
 async function checkSystemHealth() {
     try {
         // Try the root health endpoint first
-        const response = await fetch('http://127.0.0.1:8000/health');
+        const response = await fetch('API_BASE_URL');
         
         if (!response.ok) {
             throw new Error('Health check failed');
@@ -468,7 +468,7 @@ async function testBackendConnection() {
     console.log('Testing backend connection...');
     
     try {
-        const response = await fetch('http://127.0.0.1:8000/health');
+        const response = await fetch(`${API_BASE_URL}/health`);
         
         if (response.ok) {
             const data = await response.json();
