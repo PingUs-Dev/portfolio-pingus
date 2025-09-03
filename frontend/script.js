@@ -1,5 +1,6 @@
-// Configuration - Updated for proper backend connection
+// Configuration - Fixed for proper backend connection
 const API_URL = "https://pingus-backend.onrender.com";
+const API_BASE_URL = `${API_URL}/api`; // This was missing but used throughout the code
 let currentSessionId = null;
 let conversationHistory = [];
 
@@ -23,7 +24,6 @@ function initializeApp() {
 }
 
 // Enhanced Chatbot functionality with proper error handling
-// Enhanced Chatbot functionality with improved UI and no sources
 function initializeChatbot() {
     const chatbotTrigger = document.getElementById('chatbotTrigger');
     const chatPopup = document.getElementById('chatPopup');
@@ -91,7 +91,7 @@ function initializeChatbot() {
     if (messagesContainer) {
         messagesContainer.innerHTML = `
             <div class="welcome-message">
-                <p>👋 Hello! I'm your TechCraft AI assistant. I can help you with information about our services, answer questions about web development, AI solutions, and discuss how we can help bring your project to life. How can I assist you today?</p>
+                <p>Hello! I'm your TechCraft AI assistant. I can help you with information about our services, answer questions about web development, AI solutions, and discuss how we can help bring your project to life. How can I assist you today?</p>
             </div>
         `;
     }
@@ -103,7 +103,7 @@ function initializeChatSession() {
     if (!currentSessionId) {
         currentSessionId = generateSessionId();
         conversationHistory = [];
-        console.log('New chat session created:', currentSessionId); // Debug log
+        console.log('New chat session created:', currentSessionId);
     }
 }
 
@@ -111,8 +111,7 @@ function generateSessionId() {
     return 'session_' + Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
-// Updated sendMessage function with proper API endpoint
-// Updated sendMessage function with improved UI and no sources
+// Fixed sendMessage function with proper error handling and API endpoints
 async function sendMessage() {
     const chatInput = document.getElementById('chatInput');
     const messagesContainer = document.getElementById('chatMessages');
@@ -148,7 +147,7 @@ async function sendMessage() {
         // Show typing indicator
         showTypingIndicator();
         
-        // Send message to backend
+        // Send message to backend with proper URL
         console.log('Making API request to:', `${API_BASE_URL}/chat`);
         
         const response = await fetch(`${API_BASE_URL}/chat`, {
@@ -165,9 +164,15 @@ async function sendMessage() {
         });
         
         console.log('API response status:', response.status);
+        console.log('API response headers:', response.headers);
         
         if (!response.ok) {
-            const errorText = await response.text();
+            let errorText;
+            try {
+                errorText = await response.text();
+            } catch (e) {
+                errorText = `HTTP ${response.status} ${response.statusText}`;
+            }
             console.error('Response error:', errorText);
             throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
         }
@@ -178,7 +183,12 @@ async function sendMessage() {
         // Hide typing indicator
         hideTypingIndicator();
         
-        // Add assistant response to UI (without sources)
+        // Check if response contains the expected data
+        if (!data.response) {
+            throw new Error('Invalid response format from server');
+        }
+        
+        // Add assistant response to UI
         addMessageToUI('assistant', data.response);
         
         // Update conversation history
@@ -194,14 +204,21 @@ async function sendMessage() {
         console.error('Error sending message:', error);
         hideTypingIndicator();
         
-        // More specific error messages
-        let errorMessage = '⚠️ Sorry, there was an error processing your message. ';
-        if (error.message.includes('Failed to fetch')) {
-            errorMessage += 'Please check if the backend server is running on http://127.0.0.1:8000';
+        // More specific error messages for different scenarios
+        let errorMessage = 'Sorry, there was an error processing your message. ';
+        
+        if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
+            errorMessage += 'Unable to connect to the server. The service might be starting up (Render cold start) - please wait 30-60 seconds and try again.';
         } else if (error.message.includes('404')) {
-            errorMessage += 'The chat endpoint was not found. Please check the API configuration.';
+            errorMessage += 'The chat service endpoint was not found. Please check the API configuration.';
+        } else if (error.message.includes('503') || error.message.includes('502')) {
+            errorMessage += 'The AI service is temporarily unavailable. Please wait a moment and try again.';
+        } else if (error.message.includes('500')) {
+            errorMessage += 'The server encountered an internal error. Please try again later.';
+        } else if (error.message.includes('CORS')) {
+            errorMessage += 'There was a cross-origin request issue. Please contact support.';
         } else {
-            errorMessage += 'Please try again or contact support.';
+            errorMessage += 'Please try again or contact support if the problem persists.';
         }
         
         addMessageToUI('system', errorMessage);
@@ -212,7 +229,7 @@ async function sendMessage() {
         chatInput.focus();
     }
 }
-// Updated addMessageToUI function without sources
+
 function addMessageToUI(role, content) {
     const messagesContainer = document.getElementById('chatMessages');
     if (!messagesContainer) return;
@@ -251,7 +268,6 @@ function addMessageToUI(role, content) {
     console.log('Message added to UI successfully');
 }
 
-
 function formatMessage(content) {
     // Enhanced formatting for better readability
     return content
@@ -278,13 +294,6 @@ function showTypingIndicator() {
     
     messagesContainer.appendChild(typingDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function hideTypingIndicator() {
-    const typingIndicator = document.getElementById('typing-indicator');
-    if (typingIndicator) {
-        typingIndicator.remove();
-    }
 }
 
 function hideTypingIndicator() {
@@ -393,7 +402,7 @@ async function uploadDocument(file) {
         console.error('Error uploading document:', error);
         let errorMessage = 'Error uploading document: ';
         if (error.message.includes('Failed to fetch')) {
-            errorMessage += 'Cannot connect to server. Please check if the backend is running.';
+            errorMessage += 'Cannot connect to server. Please check your internet connection.';
         } else {
             errorMessage += error.message;
         }
@@ -426,11 +435,11 @@ async function loadDocumentList() {
     }
 }
 
-// System Health Check - Updated endpoint
+// System Health Check - Updated for production
 async function checkSystemHealth() {
     try {
-        // Try the root health endpoint first
-        const response = await fetch('API_BASE_URL');
+        // Use the production health endpoint
+        const response = await fetch(`${API_URL}/health`);
         
         if (!response.ok) {
             throw new Error('Health check failed');
@@ -463,12 +472,12 @@ function updateSystemStatus(health) {
     statusIndicator.style.backgroundColor = health.status === 'online' ? '#4CAF50' : '#f44336';
 }
 
-// Connection test function - call this to verify backend connectivity
+// Connection test function - updated for production
 async function testBackendConnection() {
     console.log('Testing backend connection...');
     
     try {
-        const response = await fetch(`${API_BASE_URL}/health`);
+        const response = await fetch(`${API_URL}/health`);
         
         if (response.ok) {
             const data = await response.json();
@@ -480,7 +489,7 @@ async function testBackendConnection() {
         }
     } catch (error) {
         console.error('❌ Cannot connect to backend:', error);
-        console.log('Make sure your backend is running on http://127.0.0.1:8000');
+        console.log('Backend URL:', API_URL);
         return false;
     }
 }
