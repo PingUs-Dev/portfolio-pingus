@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="TechCraft Chatbot API",
     version="1.0.0",
-    description="RAG-based chatbot API for TechCraft Solutions",
+    description="RAG-based chatbot API for PingUs Solutions",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -37,7 +37,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://your-vercel-domain.vercel.app",  # Add your Vercel URL here
+        "https://portfolio-pingus.vercel.app/",  # Add your Vercel URL here
         "http://localhost:3000",  # Keep for local development
         "http://127.0.0.1:3000"   # Keep for local development
     ],
@@ -115,7 +115,7 @@ feedback_data = {}
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return {"message": "TechCraft RAG Chatbot API", "version": "1.0.0"}
+    return {"message": "PingUs RAG Chatbot API", "version": "1.0.0"}
 
 # Fixed: Single /health endpoint (removed duplicate)
 @app.get("/health")
@@ -128,7 +128,7 @@ async def health_check():
             content={
                 "status": "healthy" if rag_engine else "degraded",
                 "timestamp": time.time(),
-                "service": "TechCraft RAG API",
+                "service": "PingUs RAG API",
                 "active_sessions": len(conversations),
                 "rag_engine_initialized": rag_engine is not None,
                 "document_count": document_count,
@@ -142,7 +142,7 @@ async def health_check():
             content={
                 "status": "error",
                 "timestamp": time.time(),
-                "service": "TechCraft RAG API",
+                "service": "PingUs RAG API",
                 "error": str(e)
             },
             status_code=500
@@ -396,7 +396,7 @@ async def get_version():
     Get API version information
     """
     return {
-        "name": "TechCraft RAG Chatbot API",
+        "name": "PingUs RAG Chatbot API",
         "version": "1.0.0",
         "environment": os.getenv("ENVIRONMENT", "development")
     }
