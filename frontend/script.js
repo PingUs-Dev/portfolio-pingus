@@ -148,9 +148,9 @@ async function sendMessage() {
         showTypingIndicator();
         
         // Send message to backend with proper URL
-        console.log('Making API request to:', `${API_BASE_URL}/chat`);
+        console.log('Making API request to:', `${API_BASE_URL}/api/chat`);
         
-        const response = await fetch(`${API_BASE_URL}/chat`, {
+        const response = await fetch(`${API_BASE_URL}/api/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -306,7 +306,7 @@ function hideTypingIndicator() {
 // Enhanced feedback function with visual feedback
 async function submitFeedback(helpful, messageId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/feedback`, {
+        const response = await fetch(`${API_BASE_URL}/api/feedback`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -380,7 +380,7 @@ async function uploadDocument(file) {
         formData.append('file', file);
         
         // Updated endpoint for file upload
-        const response = await fetch(`${API_BASE_URL}/upload`, {
+        const response = await fetch(`${API_BASE_URL}/api/upload`, {
             method: 'POST',
             body: formData
         });
@@ -416,7 +416,7 @@ async function uploadDocument(file) {
 // Updated loadDocumentList function
 async function loadDocumentList() {
     try {
-        const response = await fetch(`${API_BASE_URL}/files`);
+        const response = await fetch(`${API_BASE_URL}/api/files`);
         
         if (!response.ok) {
             console.warn(`Documents endpoint returned ${response.status}, this might be expected if not implemented`);
@@ -615,7 +615,7 @@ async function deleteDocument(filename) {
     if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
     
     try {
-        const response = await fetch(`${API_BASE_URL}/files/${filename}`, {
+        const response = await fetch(`${API_BASE_URL}/api/files/${filename}`, {
             method: 'DELETE'
         });
         
@@ -641,7 +641,7 @@ async function refreshKnowledgeBase() {
             refreshButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
         }
         
-        const response = await fetch(`${API_BASE_URL}/refresh`, {
+        const response = await fetch(`${API_BASE_URL}/api/refresh`, {
             method: 'POST'
         });
         
