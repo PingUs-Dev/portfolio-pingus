@@ -406,9 +406,23 @@ async def get_frontend_config():
     """
     Get frontend configuration
     """
+    # Get the actual API URL from environment or construct it
+    api_url = os.getenv("API_URL")
+    
+    # If no API_URL is set, try to construct it from the environment
+    if not api_url:
+        # For Railway, Render, or other platforms
+        if os.getenv("RAILWAY_PUBLIC_DOMAIN"):
+            api_url = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}"
+        elif os.getenv("RENDER_EXTERNAL_URL"):
+            api_url = os.getenv("RENDER_EXTERNAL_URL")
+        else:
+            # Fallback for local development
+            api_url = "http://localhost:8000"
+    
     return {
-        "api_url": os.getenv("API_URL", "http://localhost:8000"),
-        "websocket_url": os.getenv("WEBSOCKET_URL", "ws://localhost:8000"),
+        "api_url": api_url,
+        "websocket_url": api_url.replace("http", "ws") if api_url.startswith("http") else "ws://localhost:8000",
         "max_file_size": 10 * 1024 * 1024,
         "allowed_file_types": [".docx", ".pdf", ".txt"],
         "features": {
