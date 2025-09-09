@@ -1,10 +1,13 @@
-// Configuration - Fixed for proper backend connection
+// Configuration - Updated for proper backend connection
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
     ? 'http://127.0.0.1:8000/api' 
-    : `${window.location.protocol}//${window.location.hostname}/api`;
+    : 'https://pingus-backend.onrender.com/api';
 
 let currentSessionId = null;
 let conversationHistory = [];
+let requestTimeout = 45000; // 45 seconds timeout
+let retryCount = 0;
+const maxRetries = 3;
 
 // Wait for the DOM to be fully loaded
 document.addEventListener('DOMContentLoaded', function() {
@@ -12,6 +15,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function initializeApp() {
+    // Log the API URL being used
+    console.log('Using API Base URL:', API_BASE_URL);
+    
     // Initialize existing functionality
     initializeMobileMenu();
     initializeHeaderScroll();
@@ -93,7 +99,7 @@ function initializeChatbot() {
     if (messagesContainer) {
         messagesContainer.innerHTML = `
             <div class="welcome-message">
-                <p>Hello! I'm your TechCraft AI assistant. I can help you with information about our services, answer questions about web development, AI solutions, and discuss how we can help bring your project to life. How can I assist you today?</p>
+                <p>👋 Hello! I'm your TechCraft AI assistant. I can help you with information about our services, answer questions about web development, AI solutions, and discuss how we can help bring your project to life. How can I assist you today?</p>
             </div>
         `;
     }
@@ -113,7 +119,7 @@ function generateSessionId() {
     return 'session_' + Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
-// Fixed sendMessage function with proper error handling and API endpoints
+// Enhanced sendMessage function with retry logic and better error handling
 async function sendMessage() {
     const chatInput = document.getElementById('chatInput');
     const messagesContainer = document.getElementById('chatMessages');
@@ -149,71 +155,33 @@ async function sendMessage() {
         // Show typing indicator
         showTypingIndicator();
         
-        // Send message to backend
-        console.log('Making API request to:', `${API_BASE_URL}/chat`);
-        
-        const requestBody = {
-            message: message,
-            conversation_history: conversationHistory,
-            session_id: currentSessionId
-        };
-        
-        console.log('Request payload:', requestBody);
-        
-        const response = await fetch(`${API_BASE_URL}/chat`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-            },
-            body: JSON.stringify(requestBody)
-        });
-        
-        console.log('API response status:', response.status);
-        console.log('API response headers:', Object.fromEntries(response.headers.entries()));
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Response error:', errorText);
-            throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
-        }
-        
-        const data = await response.json();
-        console.log('Backend response:', data);
+        // Attempt to send message with retry logic
+        const response = await sendMessageWithRetry(message);
         
         // Hide typing indicator
         hideTypingIndicator();
         
-        // Add assistant response to UI (without sources)
-        addMessageToUI('assistant', data.response);
+        // Add assistant response to UI
+        addMessageToUI('assistant', response.response);
         
         // Update conversation history
         conversationHistory.push({ role: 'user', content: message });
-        conversationHistory.push({ role: 'assistant', content: data.response });
+        conversationHistory.push({ role: 'assistant', content: response.response });
         
         // Update session ID if provided
-        if (data.session_id) {
-            currentSessionId = data.session_id;
+        if (response.session_id) {
+            currentSessionId = response.session_id;
         }
+        
+        // Reset retry count on success
+        retryCount = 0;
         
     } catch (error) {
         console.error('Error sending message:', error);
         hideTypingIndicator();
         
         // More specific error messages
-        let errorMessage = '⚠️ Sorry, there was an error processing your message. ';
-        if (error.message.includes('Failed to fetch')) {
-            errorMessage += 'Cannot connect to the server. Please check your internet connection and try again.';
-        } else if (error.message.includes('404')) {
-            errorMessage += 'The chat service is not available. Please try again later.';
-        } else if (error.message.includes('400')) {
-            errorMessage += 'Invalid request format. Please try rephrasing your message.';
-        } else if (error.message.includes('500')) {
-            errorMessage += 'Server error. Please try again in a few moments.';
-        } else {
-            errorMessage += 'Please try again or contact support if the issue persists.';
-        }
-        
+        let errorMessage = handleErrorMessage(error);
         addMessageToUI('system', errorMessage);
     } finally {
         // Re-enable input
@@ -222,7 +190,109 @@ async function sendMessage() {
         chatInput.focus();
     }
 }
-// Rest of your existing functions remain the same...
+
+// Enhanced message sending with retry logic
+async function sendMessageWithRetry(message, attempt = 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+    
+    try {
+        const requestBody = {
+            message: message,
+            conversation_history: conversationHistory,
+            session_id: currentSessionId
+        };
+        
+        console.log(`Attempt ${attempt}: Making API request to:`, `${API_BASE_URL}/chat`);
+        console.log('Request payload:', requestBody);
+        
+        const response = await fetch(`${API_BASE_URL}/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        console.log('API response status:', response.status);
+        console.log('API response headers:', Object.fromEntries(response.headers.entries()));
+        
+        // Get response text first for better error handling
+        const responseText = await response.text();
+        console.log('Raw response:', responseText.substring(0, 200) + '...');
+        
+        if (!response.ok) {
+            console.error('Response error:', responseText);
+            
+            // Check if it's a rate limit error and we can retry
+            if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+                console.log(`Rate limit or service unavailable, retrying in ${attempt * 2} seconds...`);
+                await sleep(attempt * 2000); // Wait 2, 4, 6 seconds
+                return sendMessageWithRetry(message, attempt + 1);
+            }
+            
+            throw new Error(`HTTP error! status: ${response.status} - ${responseText}`);
+        }
+        
+        // Parse JSON response
+        const data = JSON.parse(responseText);
+        console.log('Parsed response success:', data.success);
+        
+        if (!data.success) {
+            throw new Error(`API returned error: ${data.response}`);
+        }
+        
+        return data;
+        
+    } catch (error) {
+        clearTimeout(timeoutId);
+        
+        // Handle network/timeout errors with retry
+        if ((error.name === 'AbortError' || error.message.includes('fetch')) && attempt < maxRetries) {
+            console.log(`Network error, retrying attempt ${attempt + 1}...`);
+            await sleep(attempt * 1000);
+            return sendMessageWithRetry(message, attempt + 1);
+        }
+        
+        throw error;
+    }
+}
+
+// Helper function for sleep
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Enhanced error message handling
+function handleErrorMessage(error) {
+    let errorMessage = '⚠️ Sorry, there was an error processing your message. ';
+    
+    if (error.name === 'AbortError') {
+        errorMessage += 'The request timed out. Please try again with a shorter message.';
+    } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        errorMessage += 'Network connection issue. Please check your internet connection and try again.';
+    } else if (error.message.includes('404')) {
+        errorMessage += 'The chat service endpoint was not found. Please contact support.';
+    } else if (error.message.includes('400')) {
+        errorMessage += 'Invalid request. Please try rephrasing your message.';
+    } else if (error.message.includes('429')) {
+        errorMessage += 'Too many requests. Please wait a moment before trying again.';
+    } else if (error.message.includes('500') || error.message.includes('503')) {
+        errorMessage += 'Server error. Please try again in a few moments.';
+    } else if (error.message.includes('rate') || error.message.includes('limit')) {
+        errorMessage += 'Rate limit reached. Please wait a moment before sending another message.';
+    } else {
+        errorMessage += 'Please try again or contact support if the issue persists.';
+    }
+    
+    return errorMessage;
+}
+
+// Updated addMessageToUI function
 function addMessageToUI(role, content) {
     const messagesContainer = document.getElementById('chatMessages');
     if (!messagesContainer) return;
@@ -261,7 +331,6 @@ function addMessageToUI(role, content) {
     console.log('Message added to UI successfully');
 }
 
-
 function formatMessage(content) {
     // Enhanced formatting for better readability
     return content
@@ -274,6 +343,9 @@ function formatMessage(content) {
 function showTypingIndicator() {
     const messagesContainer = document.getElementById('chatMessages');
     if (!messagesContainer) return;
+    
+    const existingIndicator = document.getElementById('typing-indicator');
+    if (existingIndicator) return; // Don't add multiple indicators
     
     const typingDiv = document.createElement('div');
     typingDiv.className = 'message assistant typing-indicator';
@@ -300,7 +372,7 @@ function hideTypingIndicator() {
 // Enhanced feedback function with visual feedback
 async function submitFeedback(helpful, messageId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/feedback`, {
+        const response = await fetch(`${API_BASE_URL}/feedback`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -373,8 +445,7 @@ async function uploadDocument(file) {
         const formData = new FormData();
         formData.append('file', file);
         
-        // Updated endpoint for file upload
-        const response = await fetch(`${API_BASE_URL}/api/upload`, {
+        const response = await fetch(`${API_BASE_URL}/upload`, {
             method: 'POST',
             body: formData
         });
@@ -396,7 +467,7 @@ async function uploadDocument(file) {
         console.error('Error uploading document:', error);
         let errorMessage = 'Error uploading document: ';
         if (error.message.includes('Failed to fetch')) {
-            errorMessage += 'Cannot connect to server. Please check your internet connection.';
+            errorMessage += 'Cannot connect to server. Please check if the backend is running.';
         } else {
             errorMessage += error.message;
         }
@@ -410,7 +481,7 @@ async function uploadDocument(file) {
 // Updated loadDocumentList function
 async function loadDocumentList() {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/files`);
+        const response = await fetch(`${API_BASE_URL}/files`);
         
         if (!response.ok) {
             console.warn(`Documents endpoint returned ${response.status}, this might be expected if not implemented`);
@@ -424,12 +495,11 @@ async function loadDocumentList() {
         
     } catch (error) {
         console.error('Error loading documents:', error);
-        // Don't show error to user as this might be expected
         return [];
     }
 }
 
-// System Health Check - Updated for production
+// System Health Check - Updated for deployment
 async function checkSystemHealth() {
     try {
         const healthUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
@@ -470,13 +540,16 @@ function updateSystemStatus(health) {
     statusIndicator.style.backgroundColor = health.status === 'online' ? '#4CAF50' : '#f44336';
 }
 
-
-// Connection test function - updated for production
+// Connection test function
 async function testBackendConnection() {
     console.log('Testing backend connection...');
     
     try {
-        const response = await fetch(`${API_URL}/health`);
+        const healthUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+            ? 'http://127.0.0.1:8000/health'
+            : 'https://pingus-backend.onrender.com/health';
+            
+        const response = await fetch(healthUrl);
         
         if (response.ok) {
             const data = await response.json();
@@ -488,7 +561,6 @@ async function testBackendConnection() {
         }
     } catch (error) {
         console.error('❌ Cannot connect to backend:', error);
-        console.log('Backend URL:', API_URL);
         return false;
     }
 }
@@ -614,7 +686,7 @@ async function deleteDocument(filename) {
     if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
     
     try {
-        const response = await fetch(`${API_BASE_URL}/api/files/${filename}`, {
+        const response = await fetch(`${API_BASE_URL}/files/${filename}`, {
             method: 'DELETE'
         });
         
@@ -640,7 +712,7 @@ async function refreshKnowledgeBase() {
             refreshButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
         }
         
-        const response = await fetch(`${API_BASE_URL}/api/refresh`, {
+        const response = await fetch(`${API_BASE_URL}/refresh`, {
             method: 'POST'
         });
         
@@ -809,4 +881,4 @@ window.addEventListener('error', function(e) {
 setTimeout(testBackendConnection, 1000);
 
 // Periodic health checks
-setInterval(checkSystemHealth, 30000); // Check every 30 seconds
+setInterval(checkSystemHealth, 60000); // Check every 60 seconds (reduced frequency)
