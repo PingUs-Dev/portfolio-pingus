@@ -1,6 +1,8 @@
 // Configuration - Fixed for proper backend connection
-const API_URL = "https://pingus-backend.onrender.com";
-const API_BASE_URL = API_URL; // This was missing but used throughout the code
+const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? 'http://127.0.0.1:8000/api' 
+    : `${window.location.protocol}//${window.location.hostname}/api`;
+
 let currentSessionId = null;
 let conversationHistory = [];
 
@@ -147,32 +149,31 @@ async function sendMessage() {
         // Show typing indicator
         showTypingIndicator();
         
-        // Send message to backend with proper URL
-        console.log('Making API request to:', `${API_BASE_URL}/api/chat`);
+        // Send message to backend
+        console.log('Making API request to:', `${API_BASE_URL}/chat`);
         
-        const response = await fetch(`${API_BASE_URL}/api/chat`, {
+        const requestBody = {
+            message: message,
+            conversation_history: conversationHistory,
+            session_id: currentSessionId
+        };
+        
+        console.log('Request payload:', requestBody);
+        
+        const response = await fetch(`${API_BASE_URL}/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
             },
-            body: JSON.stringify({
-                message: message,
-                conversation_history: conversationHistory,
-                session_id: currentSessionId
-            })
+            body: JSON.stringify(requestBody)
         });
         
         console.log('API response status:', response.status);
-        console.log('API response headers:', response.headers);
+        console.log('API response headers:', Object.fromEntries(response.headers.entries()));
         
         if (!response.ok) {
-            let errorText;
-            try {
-                errorText = await response.text();
-            } catch (e) {
-                errorText = `HTTP ${response.status} ${response.statusText}`;
-            }
+            const errorText = await response.text();
             console.error('Response error:', errorText);
             throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
         }
@@ -183,12 +184,7 @@ async function sendMessage() {
         // Hide typing indicator
         hideTypingIndicator();
         
-        // Check if response contains the expected data
-        if (!data.response) {
-            throw new Error('Invalid response format from server');
-        }
-        
-        // Add assistant response to UI
+        // Add assistant response to UI (without sources)
         addMessageToUI('assistant', data.response);
         
         // Update conversation history
@@ -204,21 +200,18 @@ async function sendMessage() {
         console.error('Error sending message:', error);
         hideTypingIndicator();
         
-        // More specific error messages for different scenarios
-        let errorMessage = 'Sorry, there was an error processing your message. ';
-        
-        if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
-            errorMessage += 'Unable to connect to the server. The service might be starting up (Render cold start) - please wait 30-60 seconds and try again.';
+        // More specific error messages
+        let errorMessage = '⚠️ Sorry, there was an error processing your message. ';
+        if (error.message.includes('Failed to fetch')) {
+            errorMessage += 'Cannot connect to the server. Please check your internet connection and try again.';
         } else if (error.message.includes('404')) {
-            errorMessage += 'The chat service endpoint was not found. Please check the API configuration.';
-        } else if (error.message.includes('503') || error.message.includes('502')) {
-            errorMessage += 'The AI service is temporarily unavailable. Please wait a moment and try again.';
+            errorMessage += 'The chat service is not available. Please try again later.';
+        } else if (error.message.includes('400')) {
+            errorMessage += 'Invalid request format. Please try rephrasing your message.';
         } else if (error.message.includes('500')) {
-            errorMessage += 'The server encountered an internal error. Please try again later.';
-        } else if (error.message.includes('CORS')) {
-            errorMessage += 'There was a cross-origin request issue. Please contact support.';
+            errorMessage += 'Server error. Please try again in a few moments.';
         } else {
-            errorMessage += 'Please try again or contact support if the problem persists.';
+            errorMessage += 'Please try again or contact support if the issue persists.';
         }
         
         addMessageToUI('system', errorMessage);
@@ -229,7 +222,7 @@ async function sendMessage() {
         chatInput.focus();
     }
 }
-
+// Rest of your existing functions remain the same...
 function addMessageToUI(role, content) {
     const messagesContainer = document.getElementById('chatMessages');
     if (!messagesContainer) return;
@@ -267,6 +260,7 @@ function addMessageToUI(role, content) {
     
     console.log('Message added to UI successfully');
 }
+
 
 function formatMessage(content) {
     // Enhanced formatting for better readability
@@ -438,8 +432,12 @@ async function loadDocumentList() {
 // System Health Check - Updated for production
 async function checkSystemHealth() {
     try {
-        // Use the production health endpoint
-        const response = await fetch(`${API_URL}/health`);
+        const healthUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+            ? 'http://127.0.0.1:8000/health'
+            : 'https://pingus-backend.onrender.com/health';
+            
+        console.log('Checking health at:', healthUrl);
+        const response = await fetch(healthUrl);
         
         if (!response.ok) {
             throw new Error('Health check failed');
@@ -471,6 +469,7 @@ function updateSystemStatus(health) {
     // Add visual indicator
     statusIndicator.style.backgroundColor = health.status === 'online' ? '#4CAF50' : '#f44336';
 }
+
 
 // Connection test function - updated for production
 async function testBackendConnection() {
