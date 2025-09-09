@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="TechCraft Chatbot API",
+    title="PingUs Chatbot API",
     version="1.0.0",
     description="RAG-based chatbot API for PingUs Solutions",
     docs_url="/api/docs",
@@ -34,15 +34,20 @@ app = FastAPI(
 
 # CORS middleware - Allow all origins for frontend integration
 # In main.py, update the CORS middleware
+# Enhanced CORS middleware for deployment
+allowed_origins = [
+    "https://portfolio-pingus.vercel.app",  # Your Vercel frontend
+    "http://localhost:3000",  # Local development
+    "http://127.0.0.1:3000",  # Local development
+    "http://localhost:5500",  # Live Server
+    "http://127.0.0.1:5500",  # Live Server
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://portfolio-pingus.vercel.app/",  # Add your Vercel URL here
-        "http://localhost:3000",  # Keep for local development
-        "http://127.0.0.1:3000"   # Keep for local development
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -57,7 +62,9 @@ for directory in [KNOWLEDGE_BASE_DIR, UPLOAD_DIR, CHROMA_DB_DIR]:
     directory.mkdir(exist_ok=True, parents=True)
 
 # Initialize RAG engine
+rag_engine=None
 try:
+    logger.info("Initializing RAG engine..")
     rag_engine = RagEngine(
         doc_folder=str(KNOWLEDGE_BASE_DIR),
         persist_directory=str(CHROMA_DB_DIR)
@@ -65,7 +72,7 @@ try:
     logger.info("RAG engine initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize RAG engine: {e}")
-    rag_engine = None
+    
 
 # Pydantic models
 class Message(BaseModel):
@@ -154,8 +161,15 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
     Send a message to the chatbot and get a response
     """
     try:
+        
+        logger.info(f"Received chat request: {request.message[:50]}...")
         if not rag_engine:
-            raise HTTPException(status_code=503, detail="RAG engine not initialized")
+            return ChatResponse(
+                response="I'm sorry, the AI service is currently unavailable. Please check that the API keys are properly configured.",
+                sources=[],
+                session_id=request.session_id or f"session_{uuid.uuid4().hex[:12]}",
+                success=False
+            )
         
         # Generate or retrieve session ID - Fixed to use session_id from request
         session_id = request.session_id or request.user_id or f"session_{uuid.uuid4().hex[:12]}"
@@ -180,14 +194,17 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         conversations[session_id]["message_count"] += 1
         
         # Convert history to format expected by RAG engine
-        rag_history = [
-            {"role": msg.role, "content": msg.content} 
-            for msg in request.conversation_history
-        ]
+        rag_history = []
+        if request.conversation_history:
+            rag_history = [
+                {"role": msg.role, "content": msg.content} 
+                for msg in request.conversation_history
+            ]
+        logger.info(f"Processing with RAG engine...")    
         
         # Process with RAG engine
         rag_result = rag_engine.query(request.message, rag_history)
-        
+        logger.info(f"RAG result success: {rag_result.get('success', False)}")
         # Add assistant response to history
         assistant_message_id = f"msg_{uuid.uuid4().hex[:8]}"
         assistant_message = {
@@ -211,8 +228,13 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        session_id = request.session_id or f"session_{uuid.uuid4().hex[:12]}"
+        return ChatResponse(
+            response=f"I apologize, but I'm experiencing technical difficulties: {str(e)}. Please try again later.",
+            sources=[],
+            session_id=session_id,
+            success=False
+        )
 @app.get("/api/conversation/{session_id}", tags=["Conversation"])
 async def get_conversation(session_id: str):
     """
@@ -285,7 +307,7 @@ async def upload_document(file: UploadFile = File(...)):
             f.write(content)
         
         # Add to RAG system if method exists
-        if hasattr(rag_engine, 'add_document'):
+        if rag_engine and hasattr(rag_engine, 'add_document'):
             success, message = rag_engine.add_document(str(file_path))
             
             if success:
@@ -297,7 +319,6 @@ async def upload_document(file: UploadFile = File(...)):
                     file_path.unlink()
                 raise HTTPException(status_code=400, detail=message)
         else:
-            # If add_document method doesn't exist, just save the file and reinitialize
             logger.info(f"Document uploaded successfully: {file.filename}")
             return {"message": f"Document uploaded successfully: {file.filename}"}
             
@@ -478,6 +499,11 @@ if __name__ == "__main__":
     
     # Get port from environment variable or use default
     port = int(os.getenv("PORT", 8000))
+    
+    logger.info(f"Starting server on port {port}")
+    logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'production')}")
+    logger.info(f"TOGETHER_API_KEY configured: {bool(os.getenv('TOGETHER_API_KEY'))}")
+    logger.info(f"HF_TOKEN configured: {bool(os.getenv('HF_TOKEN'))}")
     
     uvicorn.run(
         app,
